@@ -68,13 +68,26 @@ jobs:
       with:
         xcode-version: latest-stable
     
-    - name: Install Apple WWDR Certificate
+    - name: Install Apple Intermediate Certificates
       run: |
-        echo "📥 Installing Apple Worldwide Developer Relations Certification Authority..."
+        echo "🔧 Installing Apple Worldwide Developer Relations Certification Authority..."
+        
+        # Download and install Apple WWDR CA certificate (original)
         curl -o AppleWWDRCA.cer https://developer.apple.com/certificationauthority/AppleWWDRCA.cer
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain AppleWWDRCA.cer
-        rm AppleWWDRCA.cer
-        echo "✅ Apple WWDR CA installed"
+        
+        # Also install the newer G3 certificate
+        curl -o AppleWWDRCAG3.cer https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain AppleWWDRCAG3.cer
+        
+        # Install Developer ID CA certificate for distribution signing
+        curl -o DeveloperIDCA.cer https://www.apple.com/certificateauthority/DeveloperIDCA.cer
+        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain DeveloperIDCA.cer
+        
+        # Clean up
+        rm -f AppleWWDRCA.cer AppleWWDRCAG3.cer DeveloperIDCA.cer
+        
+        echo "✅ Apple intermediate certificates installed"
     
     - name: Import Code Signing Certificates
       uses: apple-actions/import-codesign-certs@v3
@@ -109,40 +122,45 @@ jobs:
     
     - name: Verify Certificate Installation
       run: |
-        echo "🔍 Available code signing identities:"
-        security find-identity -v -p codesigning
+        echo "🔍 Checking specific keychain for certificates..."
         
-        # Find any valid code signing certificate (prefer Developer ID, fallback to Apple Development)
-        CERT_LINE=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1)
+        # Check the keychain that the Apple Action created
+        KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp.keychain-db"
         
-        if [ -z "$CERT_LINE" ]; then
-          echo "🔄 No Developer ID Application found, trying Apple Development..."
-          CERT_LINE=$(security find-identity -v -p codesigning | grep "Apple Development" | head -1)
+        # Unlock the keychain
+        security unlock-keychain -p "$(echo '${{ secrets.P12_PASSWORD }}')" "$KEYCHAIN_PATH"
+        
+        # Set it as the default keychain
+        security default-keychain -s "$KEYCHAIN_PATH"
+        
+        # Try to find certificates in the specific keychain
+        echo "Certificates in signing keychain:"
+        security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+        
+        # Also try without the codesigning filter to see all certs
+        echo "All identities in signing keychain:"
+        security find-identity -v "$KEYCHAIN_PATH"
+        
+        # Try to extract the certificate name from keychain dump
+        echo "Looking for certificate in keychain dump..."
+        CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep -A1 '"Apple Development"' | head -1 | sed 's/.*"\(.*\)".*/\1/' | head -1)
+        
+        if [ -z "$CERT_NAME" ]; then
+          # Try different extraction method
+          CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | grep -i 'apple development' | sed 's/.*"\(.*\)".*/\1/' | head -1)
         fi
         
-        if [ -z "$CERT_LINE" ]; then
-          echo "❌ No code signing certificate found"
-          echo "Let's try to force import manually..."
-          
-          # Manual import as fallback
-          echo "${{ secrets.BUILD_CERTIFICATE_BASE64 }}" | base64 --decode > temp_cert.p12
-          security import temp_cert.p12 -P "${{ secrets.P12_PASSWORD }}" -A -T /usr/bin/codesign
-          rm temp_cert.p12
-          
-          echo "After manual import:"
-          security find-identity -v -p codesigning
-          
-          CERT_LINE=$(security find-identity -v -p codesigning | grep -E "(Developer ID Application|Apple Development)" | head -1)
-          
-          if [ -z "$CERT_LINE" ]; then
-            echo "❌ Still no certificate found after manual import"
-            exit 1
-          fi
+        if [ -z "$CERT_NAME" ]; then
+          echo "❌ Could not extract certificate name from keychain"
+          security dump-keychain "$KEYCHAIN_PATH" | grep -E "(labl|Apple)" | head -10
+          exit 1
         fi
         
-        CERT_NAME=$(echo "$CERT_LINE" | sed 's/.*) "\(.*\)"/\1/')
-        echo "📋 Using certificate: $CERT_NAME"
+        echo "📋 Extracted certificate name: $CERT_NAME"
         echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
+        
+        # Store the keychain path for later use
+        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
     
     - name: Get current version
       id: current_version
