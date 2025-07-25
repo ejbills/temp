@@ -92,6 +92,10 @@ jobs:
         # Verify it's a valid P12 file
         file $CERTIFICATE_PATH
         
+        # Try to inspect the P12 file contents (without extracting)
+        echo "🔍 P12 file info:"
+        openssl pkcs12 -info -in $CERTIFICATE_PATH -nokeys -nocerts -passin pass:"$P12_PASSWORD" 2>&1 | head -10 || echo "Could not read P12 info"
+        
         # Create temporary keychain
         security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
@@ -99,7 +103,22 @@ jobs:
         
         # Import certificate to keychain (import all items, not just cert)
         echo "🔄 Importing certificate..."
-        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -f pkcs12 -k $KEYCHAIN_PATH
+        if security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -f pkcs12 -k $KEYCHAIN_PATH; then
+          echo "✅ Import command succeeded"
+        else
+          echo "❌ Import command failed with exit code $?"
+          echo "🔍 Testing different password scenarios..."
+          
+          # Try without password
+          echo "Trying without password..."
+          security import $CERTIFICATE_PATH -A -f pkcs12 -k $KEYCHAIN_PATH 2>&1 || echo "No password failed"
+          
+          # Try with empty password
+          echo "Trying with empty password..."
+          security import $CERTIFICATE_PATH -P "" -A -f pkcs12 -k $KEYCHAIN_PATH 2>&1 || echo "Empty password failed"
+          
+          exit 1
+        fi
         
         # Set the keychain search list
         security list-keychain -d user -s $KEYCHAIN_PATH
