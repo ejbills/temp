@@ -81,23 +81,56 @@ jobs:
         # Import certificate from secrets
         echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
         
+        # Verify certificate file was created
+        if [ ! -f "$CERTIFICATE_PATH" ]; then
+          echo "❌ Certificate file not created"
+          exit 1
+        fi
+        
+        echo "✅ Certificate file created: $(ls -lh $CERTIFICATE_PATH)"
+        
+        # Verify it's a valid P12 file
+        file $CERTIFICATE_PATH
+        
         # Create temporary keychain
         security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         
-        # Import certificate to keychain
-        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        # Import certificate to keychain with verbose output
+        echo "🔄 Importing certificate..."
+        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH -v
+        
+        # Set the keychain search list
         security list-keychain -d user -s $KEYCHAIN_PATH
+        
+        # Verify import worked
+        echo "🔍 Checking keychain contents:"
+        security dump-keychain $KEYCHAIN_PATH
         
         # Find the actual certificate name
         echo "🔍 Available certificates:"
         security find-identity -v -p codesigning $KEYCHAIN_PATH
         
         # Get the Developer ID Application certificate name
-        CERT_NAME=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | sed 's/.*) "\(.*\)"/\1/')
+        CERT_LINE=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1)
+        
+        if [ -z "$CERT_LINE" ]; then
+          echo "❌ No Developer ID Application certificate found"
+          echo "Available certificates:"
+          security find-identity -v $KEYCHAIN_PATH
+          exit 1
+        fi
+        
+        CERT_NAME=$(echo "$CERT_LINE" | sed 's/.*) "\(.*\)"/\1/')
         echo "📋 Using certificate: $CERT_NAME"
         echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
+        
+        # Verify the certificate is valid for code signing
+        security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "$CERT_NAME" || {
+          echo "❌ Certificate not valid for code signing"
+          exit 1
+        }
         
         # Clean up
         rm $CERTIFICATE_PATH
