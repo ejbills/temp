@@ -101,24 +101,31 @@ jobs:
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         
-        # Import certificate to keychain (import all items, not just cert)
+        # Try using openssl to extract and then import
+        echo "🔄 Extracting certificate and key using openssl..."
+        
+        # Extract certificate
+        openssl pkcs12 -in $CERTIFICATE_PATH -clcerts -nokeys -out temp_cert.pem -passin pass:"$P12_PASSWORD" -passout pass:
+        
+        # Extract private key
+        openssl pkcs12 -in $CERTIFICATE_PATH -nocerts -out temp_key.pem -passin pass:"$P12_PASSWORD" -passout pass:"$KEYCHAIN_PASSWORD"
+        
+        # Check what we extracted
+        echo "🔍 Extracted certificate info:"
+        openssl x509 -in temp_cert.pem -text -noout | grep -E "(Subject|Issuer)" || echo "Could not read certificate"
+        
+        # Import certificate
         echo "🔄 Importing certificate..."
-        if security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -f pkcs12 -k $KEYCHAIN_PATH; then
-          echo "✅ Import command succeeded"
-        else
-          echo "❌ Import command failed with exit code $?"
-          echo "🔍 Testing different password scenarios..."
-          
-          # Try without password
-          echo "Trying without password..."
-          security import $CERTIFICATE_PATH -A -f pkcs12 -k $KEYCHAIN_PATH 2>&1 || echo "No password failed"
-          
-          # Try with empty password
-          echo "Trying with empty password..."
-          security import $CERTIFICATE_PATH -P "" -A -f pkcs12 -k $KEYCHAIN_PATH 2>&1 || echo "Empty password failed"
-          
-          exit 1
-        fi
+        security import temp_cert.pem -k $KEYCHAIN_PATH -A
+        
+        # Import private key  
+        echo "🔄 Importing private key..."
+        security import temp_key.pem -k $KEYCHAIN_PATH -A -P "$KEYCHAIN_PASSWORD"
+        
+        # Clean up temp files
+        rm -f temp_cert.pem temp_key.pem
+        
+        echo "✅ OpenSSL import completed"
         
         # Set the keychain search list and make it the default
         security list-keychain -d user -s $KEYCHAIN_PATH
