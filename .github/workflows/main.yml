@@ -97,16 +97,15 @@ jobs:
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         
-        # Import certificate to keychain with verbose output
+        # Import certificate to keychain
         echo "🔄 Importing certificate..."
-        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH -v
+        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
         
         # Set the keychain search list
         security list-keychain -d user -s $KEYCHAIN_PATH
         
-        # Verify import worked
-        echo "🔍 Checking keychain contents:"
-        security dump-keychain $KEYCHAIN_PATH
+        # Check if import was successful
+        echo "✅ Certificate import completed"
         
         # Find the actual certificate name
         echo "🔍 Available certificates:"
