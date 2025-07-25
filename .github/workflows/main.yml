@@ -79,11 +79,16 @@ jobs:
         echo "🔍 Available code signing identities:"
         security find-identity -v -p codesigning
         
-        # Find Developer ID Application certificate
+        # Find any valid code signing certificate (prefer Developer ID, fallback to Apple Development)
         CERT_LINE=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1)
         
         if [ -z "$CERT_LINE" ]; then
-          echo "❌ No Developer ID Application certificate found"
+          echo "🔄 No Developer ID Application found, trying Apple Development..."
+          CERT_LINE=$(security find-identity -v -p codesigning | grep "Apple Development" | head -1)
+        fi
+        
+        if [ -z "$CERT_LINE" ]; then
+          echo "❌ No code signing certificate found"
           security find-identity -v
           exit 1
         fi
@@ -158,14 +163,22 @@ jobs:
         # Clean build folder
         rm -rf build/
         
-        # Create ExportOptions.plist with actual team ID and detected certificate
+        # Create ExportOptions.plist based on certificate type
+        if echo "$SIGNING_CERTIFICATE" | grep -q "Developer ID Application"; then
+          EXPORT_METHOD="developer-id"
+          echo "🔧 Using Developer ID method for distribution"
+        else
+          EXPORT_METHOD="development"
+          echo "🔧 Using development method (Apple Development certificate)"
+        fi
+        
         cat > ExportOptions.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
             <key>method</key>
-            <string>developer-id</string>
+            <string>$EXPORT_METHOD</string>
             <key>teamID</key>
             <string>$APPLE_TEAM_ID</string>
             <key>uploadBitcode</key>
