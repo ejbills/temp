@@ -97,9 +97,9 @@ jobs:
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         
-        # Import certificate to keychain
+        # Import certificate to keychain (import all items, not just cert)
         echo "🔄 Importing certificate..."
-        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -f pkcs12 -k $KEYCHAIN_PATH
         
         # Set the keychain search list
         security list-keychain -d user -s $KEYCHAIN_PATH
@@ -107,8 +107,15 @@ jobs:
         # Check if import was successful
         echo "✅ Certificate import completed"
         
+        # Debug: Check what's actually in the keychain
+        echo "🔍 All items in keychain:"
+        security dump-keychain $KEYCHAIN_PATH | grep -E "(keychain|labl|Developer ID)" || echo "No items found"
+        
+        echo "🔍 All identities (not just codesigning):"
+        security find-identity -v $KEYCHAIN_PATH
+        
         # Find the actual certificate name
-        echo "🔍 Available certificates:"
+        echo "🔍 Available code signing certificates:"
         security find-identity -v -p codesigning $KEYCHAIN_PATH
         
         # Get the Developer ID Application certificate name
