@@ -96,6 +96,11 @@ jobs:
         # apply provisioning profile
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
         cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+        
+        # Set certificate name for build
+        CERT_NAME="Apple Development: Ethan Bills (Ethan Bills)"
+        echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
+        echo "✅ Using certificate: $CERT_NAME"
 
     - name: Get current version
       id: current_version
@@ -158,36 +163,21 @@ jobs:
       env:
         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       run: |
-        echo "🔨 Building app and creating DMG..."
+        echo "🔨 Building app with manual code signing..."
         
         # Clean build folder
         rm -rf build/
         
-        # Create ExportOptions.plist - try automatic signing first
-        if [ -n "$SIGNING_CERTIFICATE" ]; then
-          echo "🔧 Using manual signing with certificate: $SIGNING_CERTIFICATE"
-          
-          if echo "$SIGNING_CERTIFICATE" | grep -q "Developer ID Application"; then
-            EXPORT_METHOD="developer-id"
-          else
-            EXPORT_METHOD="development"
-          fi
-          
-          cat > ExportOptions.plist << EOF
+        # Create ExportOptions.plist for development signing
+        cat > ExportOptions.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
         <dict>
             <key>method</key>
-            <string>$EXPORT_METHOD</string>
+            <string>development</string>
             <key>teamID</key>
             <string>$APPLE_TEAM_ID</string>
-            <key>uploadBitcode</key>
-            <false/>
-            <key>uploadSymbols</key>
-            <true/>
-            <key>compileBitcode</key>
-            <false/>
             <key>signingStyle</key>
             <string>manual</string>
             <key>signingCertificate</key>
@@ -197,40 +187,21 @@ jobs:
         </dict>
         </plist>
         EOF
-        else
-          echo "🔧 Using automatic signing"
-          
-          cat > ExportOptions.plist << EOF
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>teamID</key>
-            <string>$APPLE_TEAM_ID</string>
-            <key>uploadBitcode</key>
-            <false/>
-            <key>uploadSymbols</key>
-            <true/>
-            <key>compileBitcode</key>
-            <false/>
-            <key>signingStyle</key>
-            <string>automatic</string>
-            <key>stripSwiftSymbols</key>
-            <true/>
-        </dict>
-        </plist>
-        EOF
-        fi
         
-        # Build for release
-        xcodebuild -project DockDoor.xcodeproj \
+        echo "📋 Using certificate: $SIGNING_CERTIFICATE"
+        echo "🏗️ Building archive..."
+        
+        # Build archive with manual code signing
+        xcodebuild archive \
+          -project DockDoor.xcodeproj \
           -scheme DockDoor \
           -configuration Release \
-          -derivedDataPath build/ \
           -archivePath build/DockDoor.xcarchive \
-          archive
+          CODE_SIGN_IDENTITY="$SIGNING_CERTIFICATE" \
+          CODE_SIGN_STYLE=Manual \
+          DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+        
+        echo "📦 Exporting .app..."
         
         # Export the app
         xcodebuild -exportArchive \
