@@ -90,6 +90,15 @@ jobs:
         security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
         security list-keychain -d user -s $KEYCHAIN_PATH
         
+        # Find the actual certificate name
+        echo "🔍 Available certificates:"
+        security find-identity -v -p codesigning $KEYCHAIN_PATH
+        
+        # Get the Developer ID Application certificate name
+        CERT_NAME=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | sed 's/.*) "\(.*\)"/\1/')
+        echo "📋 Using certificate: $CERT_NAME"
+        echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
+        
         # Clean up
         rm $CERTIFICATE_PATH
     
@@ -159,8 +168,8 @@ jobs:
         # Clean build folder
         rm -rf build/
         
-        # Create ExportOptions.plist with actual team ID
-        cat > ExportOptions.plist << 'EOF'
+        # Create ExportOptions.plist with actual team ID and detected certificate
+        cat > ExportOptions.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -176,7 +185,9 @@ jobs:
             <key>compileBitcode</key>
             <false/>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>$SIGNING_CERTIFICATE</string>
             <key>stripSwiftSymbols</key>
             <true/>
         </dict>
@@ -362,3 +373,4 @@ jobs:
         if [ -f "$KEYCHAIN_PATH" ]; then
           security delete-keychain $KEYCHAIN_PATH || true
         fi
+
