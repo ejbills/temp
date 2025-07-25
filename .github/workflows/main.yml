@@ -68,119 +68,22 @@ jobs:
       with:
         xcode-version: latest-stable
     
-    - name: Setup signing certificates
-      env:
-        BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-        P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+    - name: Import Code Signing Certificates
+      uses: apple-actions/import-codesign-certs@v3
+      with:
+        p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+        p12-password: ${{ secrets.P12_PASSWORD }}
+    
+    - name: Verify Certificate Installation
       run: |
-        # Create variables for keychain and certificate paths
-        CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
-        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-        
-        # Import certificate from secrets
-        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
-        
-        # Verify certificate file was created
-        if [ ! -f "$CERTIFICATE_PATH" ]; then
-          echo "❌ Certificate file not created"
-          exit 1
-        fi
-        
-        echo "✅ Certificate file created: $(ls -lh $CERTIFICATE_PATH)"
-        
-        # Verify it's a valid P12 file
-        file $CERTIFICATE_PATH
-        
-        # Try to inspect the P12 file contents (without extracting)
-        echo "🔍 P12 file info:"
-        openssl pkcs12 -info -in $CERTIFICATE_PATH -nokeys -nocerts -passin pass:"$P12_PASSWORD" 2>&1 | head -10 || echo "Could not read P12 info"
-        
-        # Create temporary keychain
-        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-        
-        # Try using openssl to extract and then import
-        echo "🔄 Extracting certificate and key using openssl..."
-        
-        # Extract certificate (include CA certs too)
-        openssl pkcs12 -in $CERTIFICATE_PATH -clcerts -nokeys -out temp_cert.pem -passin pass:"$P12_PASSWORD" -nodes
-        
-        # Also extract CA certificates
-        openssl pkcs12 -in $CERTIFICATE_PATH -cacerts -nokeys -out temp_ca.pem -passin pass:"$P12_PASSWORD" -nodes
-        
-        # Extract private key
-        openssl pkcs12 -in $CERTIFICATE_PATH -nocerts -out temp_key.pem -passin pass:"$P12_PASSWORD" -nodes
-        
-        # Check what we extracted
-        echo "🔍 Extracted certificate info:"
-        openssl x509 -in temp_cert.pem -text -noout | grep -E "(Subject|Issuer)" || echo "Could not read certificate"
-        
-        # Import CA certificates first (if they exist)
-        if [ -s temp_ca.pem ]; then
-          echo "🔄 Importing CA certificates..."
-          security import temp_ca.pem -k $KEYCHAIN_PATH -A
-        fi
-        
-        # Import certificate
-        echo "🔄 Importing certificate..."
-        security import temp_cert.pem -k $KEYCHAIN_PATH -A
-        
-        # Import private key  
-        echo "🔄 Importing private key..."
-        security import temp_key.pem -k $KEYCHAIN_PATH -A
-        
-        # Clean up temp files
-        rm -f temp_cert.pem temp_key.pem temp_ca.pem
-        
-        echo "✅ OpenSSL import completed"
-        
-        # Set the keychain search list and make it the default
-        security list-keychain -d user -s $KEYCHAIN_PATH
-        security default-keychain -s $KEYCHAIN_PATH
-        
-        # Re-unlock the keychain after setting it as default
-        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-        
-        # Check if import was successful
-        echo "✅ Certificate import completed"
-        
-        # Debug: Check what certificates are in the keychain
-        echo "🔍 Raw certificate dump:"
-        security dump-keychain $KEYCHAIN_PATH | grep -A5 -B5 "Developer ID" || echo "No Developer ID found in dump"
-        
-        echo "🔍 Certificate count in keychain:"
-        security dump-keychain $KEYCHAIN_PATH | grep -c "labl" || echo "0 certificates"
-        
-        # Try different ways to find identities
-        echo "🔍 All identities (current keychain):"
-        security find-identity -v $KEYCHAIN_PATH
-        
-        echo "🔍 All identities (default search):"
-        security find-identity -v
-        
-        # Find the actual certificate name
-        echo "🔍 Available code signing certificates (current keychain):"
-        security find-identity -v -p codesigning $KEYCHAIN_PATH
-        
-        echo "🔍 Available code signing certificates (default search):"
+        echo "🔍 Available code signing identities:"
         security find-identity -v -p codesigning
         
-        # Get the Developer ID Application certificate name (try both methods)
-        CERT_LINE=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1)
-        
-        # If not found in specific keychain, try default search
-        if [ -z "$CERT_LINE" ]; then
-          echo "🔄 Not found in specific keychain, trying default search..."
-          CERT_LINE=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1)
-        fi
+        # Find Developer ID Application certificate
+        CERT_LINE=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1)
         
         if [ -z "$CERT_LINE" ]; then
-          echo "❌ No Developer ID Application certificate found in any keychain"
-          echo "Available certificates in specific keychain:"
-          security find-identity -v $KEYCHAIN_PATH
-          echo "Available certificates in default search:"
+          echo "❌ No Developer ID Application certificate found"
           security find-identity -v
           exit 1
         fi
@@ -188,15 +91,6 @@ jobs:
         CERT_NAME=$(echo "$CERT_LINE" | sed 's/.*) "\(.*\)"/\1/')
         echo "📋 Using certificate: $CERT_NAME"
         echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
-        
-        # Verify the certificate is valid for code signing
-        security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "$CERT_NAME" || {
-          echo "❌ Certificate not valid for code signing"
-          exit 1
-        }
-        
-        # Clean up
-        rm $CERTIFICATE_PATH
     
     - name: Get current version
       id: current_version
@@ -462,11 +356,4 @@ jobs:
         echo "🚀 Ready for real release? Run 'Sparkle Release Automation' workflow"
         echo "⚠️  Remember to merge this branch to main first if testing on a feature branch"
     
-    - name: Clean up keychain
-      if: always()
-      run: |
-        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-        if [ -f "$KEYCHAIN_PATH" ]; then
-          security delete-keychain $KEYCHAIN_PATH || true
-        fi
 
