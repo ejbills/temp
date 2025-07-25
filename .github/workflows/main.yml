@@ -104,15 +104,24 @@ jobs:
         # Try using openssl to extract and then import
         echo "🔄 Extracting certificate and key using openssl..."
         
-        # Extract certificate
-        openssl pkcs12 -in $CERTIFICATE_PATH -clcerts -nokeys -out temp_cert.pem -passin pass:"$P12_PASSWORD" -passout pass:
+        # Extract certificate (include CA certs too)
+        openssl pkcs12 -in $CERTIFICATE_PATH -clcerts -nokeys -out temp_cert.pem -passin pass:"$P12_PASSWORD" -nodes
+        
+        # Also extract CA certificates
+        openssl pkcs12 -in $CERTIFICATE_PATH -cacerts -nokeys -out temp_ca.pem -passin pass:"$P12_PASSWORD" -nodes
         
         # Extract private key
-        openssl pkcs12 -in $CERTIFICATE_PATH -nocerts -out temp_key.pem -passin pass:"$P12_PASSWORD" -passout pass:"$KEYCHAIN_PASSWORD"
+        openssl pkcs12 -in $CERTIFICATE_PATH -nocerts -out temp_key.pem -passin pass:"$P12_PASSWORD" -nodes
         
         # Check what we extracted
         echo "🔍 Extracted certificate info:"
         openssl x509 -in temp_cert.pem -text -noout | grep -E "(Subject|Issuer)" || echo "Could not read certificate"
+        
+        # Import CA certificates first (if they exist)
+        if [ -s temp_ca.pem ]; then
+          echo "🔄 Importing CA certificates..."
+          security import temp_ca.pem -k $KEYCHAIN_PATH -A
+        fi
         
         # Import certificate
         echo "🔄 Importing certificate..."
@@ -120,10 +129,10 @@ jobs:
         
         # Import private key  
         echo "🔄 Importing private key..."
-        security import temp_key.pem -k $KEYCHAIN_PATH -A -P "$KEYCHAIN_PASSWORD"
+        security import temp_key.pem -k $KEYCHAIN_PATH -A
         
         # Clean up temp files
-        rm -f temp_cert.pem temp_key.pem
+        rm -f temp_cert.pem temp_key.pem temp_ca.pem
         
         echo "✅ OpenSSL import completed"
         
