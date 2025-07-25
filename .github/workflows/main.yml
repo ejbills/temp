@@ -120,30 +120,52 @@ jobs:
           exit 1
         fi
         
-        # Set the keychain search list
+        # Set the keychain search list and make it the default
         security list-keychain -d user -s $KEYCHAIN_PATH
+        security default-keychain -s $KEYCHAIN_PATH
+        
+        # Re-unlock the keychain after setting it as default
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         
         # Check if import was successful
         echo "✅ Certificate import completed"
         
-        # Debug: Check what's actually in the keychain
-        echo "🔍 All items in keychain:"
-        security dump-keychain $KEYCHAIN_PATH | grep -E "(keychain|labl|Developer ID)" || echo "No items found"
+        # Debug: Check what certificates are in the keychain
+        echo "🔍 Raw certificate dump:"
+        security dump-keychain $KEYCHAIN_PATH | grep -A5 -B5 "Developer ID" || echo "No Developer ID found in dump"
         
-        echo "🔍 All identities (not just codesigning):"
+        echo "🔍 Certificate count in keychain:"
+        security dump-keychain $KEYCHAIN_PATH | grep -c "labl" || echo "0 certificates"
+        
+        # Try different ways to find identities
+        echo "🔍 All identities (current keychain):"
         security find-identity -v $KEYCHAIN_PATH
         
+        echo "🔍 All identities (default search):"
+        security find-identity -v
+        
         # Find the actual certificate name
-        echo "🔍 Available code signing certificates:"
+        echo "🔍 Available code signing certificates (current keychain):"
         security find-identity -v -p codesigning $KEYCHAIN_PATH
         
-        # Get the Developer ID Application certificate name
+        echo "🔍 Available code signing certificates (default search):"
+        security find-identity -v -p codesigning
+        
+        # Get the Developer ID Application certificate name (try both methods)
         CERT_LINE=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1)
         
+        # If not found in specific keychain, try default search
         if [ -z "$CERT_LINE" ]; then
-          echo "❌ No Developer ID Application certificate found"
-          echo "Available certificates:"
+          echo "🔄 Not found in specific keychain, trying default search..."
+          CERT_LINE=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1)
+        fi
+        
+        if [ -z "$CERT_LINE" ]; then
+          echo "❌ No Developer ID Application certificate found in any keychain"
+          echo "Available certificates in specific keychain:"
           security find-identity -v $KEYCHAIN_PATH
+          echo "Available certificates in default search:"
+          security find-identity -v
           exit 1
         fi
         
