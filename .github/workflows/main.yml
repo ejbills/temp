@@ -68,11 +68,44 @@ jobs:
       with:
         xcode-version: latest-stable
     
+    - name: Install Apple WWDR Certificate
+      run: |
+        echo "📥 Installing Apple Worldwide Developer Relations Certification Authority..."
+        curl -o AppleWWDRCA.cer https://developer.apple.com/certificationauthority/AppleWWDRCA.cer
+        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain AppleWWDRCA.cer
+        rm AppleWWDRCA.cer
+        echo "✅ Apple WWDR CA installed"
+    
     - name: Import Code Signing Certificates
       uses: apple-actions/import-codesign-certs@v3
       with:
         p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
         p12-password: ${{ secrets.P12_PASSWORD }}
+    
+    - name: Debug Certificate Import
+      run: |
+        echo "🔍 Debugging certificate import..."
+        echo "All keychains:"
+        security list-keychains
+        echo ""
+        
+        echo "Default keychain:"
+        security default-keychain
+        echo ""
+        
+        echo "All certificates in all keychains:"
+        security find-identity -v
+        echo ""
+        
+        echo "Code signing certificates in all keychains:"
+        security find-identity -v -p codesigning
+        echo ""
+        
+        # Try each keychain individually
+        for keychain in $(security list-keychains | tr -d '"' | xargs); do
+          echo "Checking keychain: $keychain"
+          security find-identity -v -p codesigning "$keychain" || echo "No certs in $keychain"
+        done
     
     - name: Verify Certificate Installation
       run: |
@@ -89,8 +122,22 @@ jobs:
         
         if [ -z "$CERT_LINE" ]; then
           echo "❌ No code signing certificate found"
-          security find-identity -v
-          exit 1
+          echo "Let's try to force import manually..."
+          
+          # Manual import as fallback
+          echo "${{ secrets.BUILD_CERTIFICATE_BASE64 }}" | base64 --decode > temp_cert.p12
+          security import temp_cert.p12 -P "${{ secrets.P12_PASSWORD }}" -A -T /usr/bin/codesign
+          rm temp_cert.p12
+          
+          echo "After manual import:"
+          security find-identity -v -p codesigning
+          
+          CERT_LINE=$(security find-identity -v -p codesigning | grep -E "(Developer ID Application|Apple Development)" | head -1)
+          
+          if [ -z "$CERT_LINE" ]; then
+            echo "❌ Still no certificate found after manual import"
+            exit 1
+          fi
         fi
         
         CERT_NAME=$(echo "$CERT_LINE" | sed 's/.*) "\(.*\)"/\1/')
