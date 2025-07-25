@@ -89,38 +89,54 @@ jobs:
         
         echo "✅ Apple intermediate certificates installed"
     
-    - name: Import Code Signing Certificates
-      uses: apple-actions/import-codesign-certs@v3
-      with:
-        p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-        p12-password: ${{ secrets.P12_PASSWORD }}
-    
-    - name: Setup Certificate for Build
+    - name: Import Code Signing Certificates (Manual)
+      env:
+        BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+        P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       run: |
-        echo "🔍 Setting up certificate for build..."
+        echo "🔐 Setting up code signing certificates manually..."
         
-        # Check the keychain that the Apple Action created (default name)
-        KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp.keychain-db"
+        # Create certificate file from base64
+        CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode > $CERTIFICATE_PATH
         
-        # The action auto-generates the password, so we need to try unlocking without knowing it
-        # Let's just set it as default keychain - it should already be unlocked
-        if [ -f "$KEYCHAIN_PATH" ]; then
-          security default-keychain -s "$KEYCHAIN_PATH"
-          echo "✅ Using keychain: $KEYCHAIN_PATH"
-        else
-          echo "⚠️ Default keychain not found, using system default"
-        fi
+        # Create temporary keychain
+        KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+        security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         
-        # Try to extract any certificate name from keychain
-        CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
+        # Import certificate to keychain
+        security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+        security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+        security list-keychain -d user -s $KEYCHAIN_PATH
+        
+        # Find and set signing certificate
+        echo "🔍 Looking for signing certificate..."
+        CERT_NAME=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | head -1 | grep '"' | sed 's/.*"\(.*\)".*/\1/')
         
         if [ -z "$CERT_NAME" ]; then
-          echo "⚠️ Could not extract certificate name, will try automatic signing"
-          echo "SIGNING_CERTIFICATE=" >> $GITHUB_ENV
-        else
-          echo "📋 Found certificate: $CERT_NAME"
-          echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
+          echo "⚠️ No certificate found, trying to list all identities..."
+          security find-identity -v $KEYCHAIN_PATH
+          # Try to get any certificate
+          CERT_NAME=$(security find-identity -v $KEYCHAIN_PATH | head -1 | grep '"' | sed 's/.*"\(.*\)".*/\1/')
         fi
+        
+        if [ -n "$CERT_NAME" ]; then
+          echo "✅ Found certificate: $CERT_NAME"
+          echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
+        else
+          echo "❌ No certificate found, will use automatic signing"
+          echo "SIGNING_CERTIFICATE=" >> $GITHUB_ENV
+        fi
+        
+        # Store keychain info for cleanup
+        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+        echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> $GITHUB_ENV
+        
+        # Clean up certificate file
+        rm $CERTIFICATE_PATH
     
     - name: Get current version
       id: current_version
@@ -420,5 +436,13 @@ jobs:
         echo ""
         echo "🚀 Ready for real release? Run 'Sparkle Release Automation' workflow"
         echo "⚠️  Remember to merge this branch to main first if testing on a feature branch"
+    
+    - name: Clean up keychain
+      if: always()
+      run: |
+        if [ -n "$KEYCHAIN_PATH" ] && [ -f "$KEYCHAIN_PATH" ]; then
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          echo "✅ Cleaned up temporary keychain"
+        fi
     
 
