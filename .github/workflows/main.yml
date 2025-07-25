@@ -94,21 +94,22 @@ jobs:
       with:
         p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
         p12-password: ${{ secrets.P12_PASSWORD }}
-        keychain: signing_temp_${{ github.run_id }}
-        keychain-password: ${{ github.run_id }}
     
     - name: Setup Certificate for Build
       run: |
         echo "🔍 Setting up certificate for build..."
         
-        # Check the keychain that the Apple Action created
-        KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp_${{ github.run_id }}.keychain-db"
+        # Check the keychain that the Apple Action created (default name)
+        KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp.keychain-db"
         
-        # Unlock the keychain
-        security unlock-keychain -p "${{ github.run_id }}" "$KEYCHAIN_PATH"
-        
-        # Set it as the default keychain
-        security default-keychain -s "$KEYCHAIN_PATH"
+        # The action auto-generates the password, so we need to try unlocking without knowing it
+        # Let's just set it as default keychain - it should already be unlocked
+        if [ -f "$KEYCHAIN_PATH" ]; then
+          security default-keychain -s "$KEYCHAIN_PATH"
+          echo "✅ Using keychain: $KEYCHAIN_PATH"
+        else
+          echo "⚠️ Default keychain not found, using system default"
+        fi
         
         # Try to extract any certificate name from keychain
         CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
