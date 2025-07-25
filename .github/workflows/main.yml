@@ -67,77 +67,36 @@ jobs:
       uses: maxim-lobanov/setup-xcode@v1
       with:
         xcode-version: latest-stable
-    
-    - name: Install Apple Intermediate Certificates
-      run: |
-        echo "🔧 Installing Apple Worldwide Developer Relations Certification Authority..."
-        
-        # Download and install Apple WWDR CA certificate (original)
-        curl -o AppleWWDRCA.cer https://developer.apple.com/certificationauthority/AppleWWDRCA.cer
-        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain AppleWWDRCA.cer
-        
-        # Also install the newer G3 certificate
-        curl -o AppleWWDRCAG3.cer https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
-        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain AppleWWDRCAG3.cer
-        
-        # Install Developer ID CA certificate for distribution signing
-        curl -o DeveloperIDCA.cer https://www.apple.com/certificateauthority/DeveloperIDCA.cer
-        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain DeveloperIDCA.cer
-        
-        # Clean up
-        rm -f AppleWWDRCA.cer AppleWWDRCAG3.cer DeveloperIDCA.cer
-        
-        echo "✅ Apple intermediate certificates installed"
-    
-    - name: Import Code Signing Certificates (Manual)
+    - name: Install the Apple certificate and provisioning profile
       env:
         BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
         P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
         KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       run: |
-        echo "🔐 Setting up code signing certificates manually..."
-        
-        # Create certificate file from base64
+        # create variables
         CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
-        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode > $CERTIFICATE_PATH
-        
-        # Create temporary keychain
+        PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
         KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+        # import certificate and provisioning profile from secrets
+        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+        echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+
+        # create temporary keychain
         security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-        
-        # Import certificate to keychain
+
+        # import certificate to keychain
         security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
         security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
         security list-keychain -d user -s $KEYCHAIN_PATH
-        
-        # Find and set signing certificate
-        echo "🔍 Looking for signing certificate..."
-        CERT_NAME=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | head -1 | grep '"' | sed 's/.*"\(.*\)".*/\1/')
-        
-        if [ -z "$CERT_NAME" ]; then
-          echo "⚠️ No certificate found, trying to list all identities..."
-          security find-identity -v $KEYCHAIN_PATH
-          # Try to get any certificate
-          CERT_NAME=$(security find-identity -v $KEYCHAIN_PATH | head -1 | grep '"' | sed 's/.*"\(.*\)".*/\1/')
-        fi
-        
-        if [ -n "$CERT_NAME" ]; then
-          echo "✅ Found certificate: $CERT_NAME"
-          echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
-        else
-          echo "❌ No certificate found, will use automatic signing"
-          echo "SIGNING_CERTIFICATE=" >> $GITHUB_ENV
-        fi
-        
-        # Store keychain info for cleanup
-        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
-        echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> $GITHUB_ENV
-        
-        # Clean up certificate file
-        rm $CERTIFICATE_PATH
-    
+
+        # apply provisioning profile
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+        cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles
+
     - name: Get current version
       id: current_version
       run: |
