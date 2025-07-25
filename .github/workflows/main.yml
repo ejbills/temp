@@ -143,17 +143,27 @@ jobs:
         
         # Try to extract the certificate name from keychain dump
         echo "Looking for certificate in keychain dump..."
-        CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep -A1 '"Apple Development"' | head -1 | sed 's/.*"\(.*\)".*/\1/' | head -1)
+        
+        # Method 1: Look for labl attribute with Apple Development
+        CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | grep -i 'apple development' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
         
         if [ -z "$CERT_NAME" ]; then
-          # Try different extraction method
-          CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | grep -i 'apple development' | sed 's/.*"\(.*\)".*/\1/' | head -1)
+          # Method 2: Look for any certificate with Apple in the name
+          CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | grep -i 'apple' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
         fi
         
         if [ -z "$CERT_NAME" ]; then
-          echo "❌ Could not extract certificate name from keychain"
-          security dump-keychain "$KEYCHAIN_PATH" | grep -E "(labl|Apple)" | head -10
-          exit 1
+          # Method 3: Show all available labels for debugging
+          echo "❌ Could not extract certificate name. Available certificates:"
+          security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/'
+          
+          # Try to use the first certificate we find
+          CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
+          
+          if [ -z "$CERT_NAME" ]; then
+            echo "❌ No certificates found in keychain"
+            exit 1
+          fi
         fi
         
         echo "📋 Extracted certificate name: $CERT_NAME"
@@ -161,6 +171,25 @@ jobs:
         
         # Store the keychain path for later use
         echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+        
+        # Test if we can actually use this certificate for signing
+        echo "🧪 Testing certificate for code signing..."
+        
+        # Create a simple test file to sign
+        echo "test" > test_file.txt
+        
+        # Try to sign it with the extracted certificate
+        if codesign -s "$CERT_NAME" test_file.txt 2>/dev/null; then
+          echo "✅ Certificate works for code signing!"
+        else
+          echo "⚠️ Certificate may not work for code signing, but continuing..."
+          # List what codesign can see
+          echo "Available signing identities from codesign perspective:"
+          codesign -s "Apple" test_file.txt 2>&1 | head -5 || true
+        fi
+        
+        # Clean up test file
+        rm -f test_file.txt
     
     - name: Get current version
       id: current_version
