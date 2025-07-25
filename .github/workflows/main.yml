@@ -94,6 +94,8 @@ jobs:
       with:
         p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
         p12-password: ${{ secrets.P12_PASSWORD }}
+        keychain: signing_temp_${{ github.run_id }}
+        keychain-password: ${{ github.run_id }}
     
     - name: Debug Certificate Import
       run: |
@@ -125,10 +127,10 @@ jobs:
         echo "🔍 Checking specific keychain for certificates..."
         
         # Check the keychain that the Apple Action created
-        KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp.keychain-db"
+        KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp_${{ github.run_id }}.keychain-db"
         
         # Unlock the keychain
-        security unlock-keychain -p "$(echo '${{ secrets.P12_PASSWORD }}')" "$KEYCHAIN_PATH"
+        security unlock-keychain -p "${{ github.run_id }}" "$KEYCHAIN_PATH"
         
         # Set it as the default keychain
         security default-keychain -s "$KEYCHAIN_PATH"
