@@ -97,34 +97,9 @@ jobs:
         keychain: signing_temp_${{ github.run_id }}
         keychain-password: ${{ github.run_id }}
     
-    - name: Debug Certificate Import
+    - name: Setup Certificate for Build
       run: |
-        echo "🔍 Debugging certificate import..."
-        echo "All keychains:"
-        security list-keychains
-        echo ""
-        
-        echo "Default keychain:"
-        security default-keychain
-        echo ""
-        
-        echo "All certificates in all keychains:"
-        security find-identity -v
-        echo ""
-        
-        echo "Code signing certificates in all keychains:"
-        security find-identity -v -p codesigning
-        echo ""
-        
-        # Try each keychain individually
-        for keychain in $(security list-keychains | tr -d '"' | xargs); do
-          echo "Checking keychain: $keychain"
-          security find-identity -v -p codesigning "$keychain" || echo "No certs in $keychain"
-        done
-    
-    - name: Verify Certificate Installation
-      run: |
-        echo "🔍 Checking specific keychain for certificates..."
+        echo "🔍 Setting up certificate for build..."
         
         # Check the keychain that the Apple Action created
         KEYCHAIN_PATH="/Users/runner/Library/Keychains/signing_temp_${{ github.run_id }}.keychain-db"
@@ -135,63 +110,16 @@ jobs:
         # Set it as the default keychain
         security default-keychain -s "$KEYCHAIN_PATH"
         
-        # Try to find certificates in the specific keychain
-        echo "Certificates in signing keychain:"
-        security find-identity -v -p codesigning "$KEYCHAIN_PATH"
-        
-        # Also try without the codesigning filter to see all certs
-        echo "All identities in signing keychain:"
-        security find-identity -v "$KEYCHAIN_PATH"
-        
-        # Try to extract the certificate name from keychain dump
-        echo "Looking for certificate in keychain dump..."
-        
-        # Method 1: Look for labl attribute with Apple Development
-        CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | grep -i 'apple development' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
+        # Try to extract any certificate name from keychain
+        CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
         
         if [ -z "$CERT_NAME" ]; then
-          # Method 2: Look for any certificate with Apple in the name
-          CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | grep -i 'apple' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
-        fi
-        
-        if [ -z "$CERT_NAME" ]; then
-          # Method 3: Show all available labels for debugging
-          echo "❌ Could not extract certificate name. Available certificates:"
-          security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/'
-          
-          # Try to use the first certificate we find
-          CERT_NAME=$(security dump-keychain "$KEYCHAIN_PATH" | grep 'labl' | sed 's/.*"labl"<blob>="\(.*\)"/\1/' | head -1)
-          
-          if [ -z "$CERT_NAME" ]; then
-            echo "❌ No certificates found in keychain"
-            exit 1
-          fi
-        fi
-        
-        echo "📋 Extracted certificate name: $CERT_NAME"
-        echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
-        
-        # Store the keychain path for later use
-        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
-        
-        # Test if we can actually use this certificate for signing
-        echo "🧪 Testing certificate for code signing..."
-        
-        # Create a simple test file to sign
-        echo "test" > test_file.txt
-        
-        # Try to sign it with the extracted certificate
-        if codesign -s "$CERT_NAME" test_file.txt 2>/dev/null; then
-          echo "✅ Certificate works for code signing!"
+          echo "⚠️ Could not extract certificate name, will try automatic signing"
+          echo "SIGNING_CERTIFICATE=" >> $GITHUB_ENV
         else
-          echo "⚠️ Certificate may not work for code signing, but continuing..."
-          # List what codesign can see
-          echo "Available signing identities from codesign perspective:"
-          codesign -s "Apple" test_file.txt 2>&1 | head -5 || true
+          echo "📋 Found certificate: $CERT_NAME"
+          echo "SIGNING_CERTIFICATE=$CERT_NAME" >> $GITHUB_ENV
         fi
-        
-        # Clean up test file
-        rm -f test_file.txt
     
     - name: Get current version
       id: current_version
@@ -259,16 +187,17 @@ jobs:
         # Clean build folder
         rm -rf build/
         
-        # Create ExportOptions.plist based on certificate type
-        if echo "$SIGNING_CERTIFICATE" | grep -q "Developer ID Application"; then
-          EXPORT_METHOD="developer-id"
-          echo "🔧 Using Developer ID method for distribution"
-        else
-          EXPORT_METHOD="development"
-          echo "🔧 Using development method (Apple Development certificate)"
-        fi
-        
-        cat > ExportOptions.plist << EOF
+        # Create ExportOptions.plist - try automatic signing first
+        if [ -n "$SIGNING_CERTIFICATE" ]; then
+          echo "🔧 Using manual signing with certificate: $SIGNING_CERTIFICATE"
+          
+          if echo "$SIGNING_CERTIFICATE" | grep -q "Developer ID Application"; then
+            EXPORT_METHOD="developer-id"
+          else
+            EXPORT_METHOD="development"
+          fi
+          
+          cat > ExportOptions.plist << EOF
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -292,6 +221,32 @@ jobs:
         </dict>
         </plist>
         EOF
+        else
+          echo "🔧 Using automatic signing"
+          
+          cat > ExportOptions.plist << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>teamID</key>
+            <string>$APPLE_TEAM_ID</string>
+            <key>uploadBitcode</key>
+            <false/>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+        </dict>
+        </plist>
+        EOF
+        fi
         
         # Build for release
         xcodebuild -project DockDoor.xcodeproj \
